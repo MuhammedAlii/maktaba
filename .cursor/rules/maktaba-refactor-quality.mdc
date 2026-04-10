@@ -1,0 +1,51 @@
+---
+description: Maktaba — refactor, sadeleştirme, performans ve best practices (TS/React/Firebase)
+alwaysApply: true
+---
+
+# Maktaba — kod kalitesi ve refactor
+
+Bu kural **tüm sohbetlerde** geçerlidir: ajan veya geliştirici projede değişiklik yaparken aşağıdaki ilkeleri uygular. Büyük dosyaları (ör. `UserDetail.tsx`) **tek seferde** yeniden yazmak yerine modül modül, PR boyutunda ilerler.
+
+Bu kural, projede **kademeli iyileştirme** yaparken (sayfa / servis / hook bazında) uyulacak standartları tanımlar.
+
+## Kapsam ve tempo
+
+- **Parça parça ilerle:** Tek seferde tüm projeyi yeniden yazma. Bir hedef seç (ör. tek sayfa, tek `services/*` modülü, tek layout). Diff küçük ve gözden geçirilebilir kalsın.
+- **Mevcut stile uy:** İsimlendirme, import sırası, Tailwind sınıf kalıpları, `firestoreHelpers` / `useCollection` kullanımı gibi yerleşik örnekleri önce oku; yeni bir “mimari” icat etme.
+- **Kapsam dışına çıkma:** İstenen dosya dışında “temizlik” bahanesiyle alakasız dosyalara dokunma.
+
+## Gereksiz kod ve sadeleştirme
+
+- **Sil:** Kullanılmayan import, değişken, fonksiyon, yorum satırına alınmış eski bloklar, ölü `useState` / `useEffect`.
+- **Birleştir:** Aynı mantığın kopyası (ör. baş harf üretimi, telefon maskesi, avatar gösterimi) varsa `utils/` veya küçük paylaşılan bileşene taşı; tekrarları tek kaynakta topla.
+- **Uzun bileşenler:** 300+ satırlık sayfa bileşenlerinde UI parçalarını (tablo satırı, modal, form bölümü) alt bileşen veya `useXxxForm` hook’una ayır; iş mantığını mümkünse `services/` veya `hooks/` içinde tut.
+
+## Performans (abartmadan, ölçülü)
+
+- **Firestore:** Gereksiz `useCollection` genişliği — sadece ihtiyaç duyulan koleksiyon + `where` ile sınırla. Tek kayıt için `getDoc` / `firestoreHelpers.get` düşün. Dinleyicileri sayfa dışına çıkınca gereksiz açık bırakma (hook’un unsubscribe davranışına uy).
+- **React render:** `useMemo` / `useCallback` yalnızca gerçekten pahalı hesap veya stabil referans gerektiğinde; her prop için körü körüne ekleme.
+- **Listeler:** Çok büyük listelerde (yüzlerce satır) sanallaştırma veya sayfalama ihtiyacını not et; küçük listelerde erken optimizasyon yapma.
+- **Ağ / medya:** Büyük görsellerde zaten Cloudinary kullanımı var; gereksiz tekrar yükleme veya üst üste istek döngüsü oluşturma.
+
+## TypeScript ve güvenlik
+
+- **`any` kullanma** — gerekirse `unknown` + daraltma veya mevcut domain tiplerini genişlet.
+- **Firestore güncellemeleri** — `deleteField()` vb. için tipleri bilinçli kullan; mümkünse ilgili arayüzle hizala.
+- **Ortam değişkenleri** — `import.meta.env.VITE_*` dışında gizli anahtar istemciye koyma (Cloudinary/Firebase kurallarına uy).
+
+## UX ve tutarlılık
+
+- **Yükleme / hata:** Mevcut `showLoading` / `hideLoading`, `showError`, `showConfirm` kalıplarını koru; aynı iş için farklı bildirim icat etme.
+- **Erişilebilirlik:** Formlarda `label` + `htmlFor`, anlamlı `button type`, mümkünse boş `alt` yerine açıklayıcı veya dekoratif için boş `alt=""` bilinçli kullanım.
+
+## Refactor kontrol listesi (PR / görev sonu)
+
+- [ ] Davranış değişikliği istenmediyse kullanıcı akışı aynı mı?
+- [ ] Yeni ölü kod veya yorum kalmadı mı?
+- [ ] `npx tsc --noEmit` ve mevcut lint temiz mi?
+- [ ] Firestore kuralları / yeni sorgular için index ihtiyacı dokümante veya bilinçli mi?
+
+## Özet ilke
+
+**Sadeleştir, tekrarları birleştir, gereksiz işi ve veri çekimini azalt;** stil ve araç seçimlerinde projedeki halihazır iyi örnekleri referans al.
