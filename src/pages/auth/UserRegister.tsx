@@ -5,7 +5,7 @@ import { register, type RegisterData } from '../../services/authService';
 import { useAuth } from '../../contexts/AuthContext';
 import { formatPhoneInput } from '../../utils/phoneMask';
 import { showError, showLoading, hideLoading } from '../../services/notificationService';
-import { useCollection } from '../../hooks/useFirestore';
+import { useCollection, firestoreHelpers } from '../../hooks/useFirestore';
 import { where } from 'firebase/firestore';
 import loginUserBg from '../../assets/login_user_bg.jpg';
 import maktabaLogo from '../../assets/maktaba-logo.png';
@@ -38,6 +38,9 @@ export default function UserRegister() {
   const [isRegionOpen, setIsRegionOpen] = useState(false);
   const [regionSearch, setRegionSearch] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  type AvailabilityState = 'idle' | 'checking' | 'available' | 'taken';
+  const [usernameAvailability, setUsernameAvailability] = useState<AvailabilityState>('idle');
+  const [emailAvailability, setEmailAvailability] = useState<AvailabilityState>('idle');
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
@@ -60,6 +63,53 @@ export default function UserRegister() {
   );
   const selectedRegion = regions.find((r) => r.id === formData.regionId);
 
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      const usernameRaw = formData.username.trim();
+      const usernameLower = usernameRaw.toLowerCase();
+      const usernameCandidates = Array.from(new Set([usernameRaw, usernameLower])).filter(Boolean);
+
+      if (usernameRaw.length >= 3) {
+        setUsernameAvailability('checking');
+        firestoreHelpers
+          .getAll('users', [
+            where(
+              'username',
+              usernameCandidates.length > 1 ? 'in' : '==',
+              usernameCandidates.length > 1 ? usernameCandidates : usernameLower,
+            ),
+            firestoreHelpers.query.limit(1),
+          ])
+          .then((res) => setUsernameAvailability(res.length > 0 ? 'taken' : 'available'))
+          .catch(() => setUsernameAvailability('idle'));
+      } else {
+        setUsernameAvailability('idle');
+      }
+
+      const emailRaw = formData.email.trim();
+      const emailLower = emailRaw.toLowerCase();
+      const emailCandidates = Array.from(new Set([emailRaw, emailLower])).filter(Boolean);
+      if (emailRaw.includes('@') && emailRaw.length >= 6) {
+        setEmailAvailability('checking');
+        firestoreHelpers
+          .getAll('users', [
+            where(
+              'email',
+              emailCandidates.length > 1 ? 'in' : '==',
+              emailCandidates.length > 1 ? emailCandidates : emailLower,
+            ),
+            firestoreHelpers.query.limit(1),
+          ])
+          .then((res) => setEmailAvailability(res.length > 0 ? 'taken' : 'available'))
+          .catch(() => setEmailAvailability('idle'));
+      } else {
+        setEmailAvailability('idle');
+      }
+    }, 450);
+
+    return () => window.clearTimeout(t);
+  }, [formData.username, formData.email]);
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
@@ -73,6 +123,14 @@ export default function UserRegister() {
     }
     if (!formData.name.trim() || !formData.lastname.trim() || !formData.username.trim() || !formData.email.trim()) {
       await showError('Ad, soyad, kullanıcı adı ve email zorunludur.');
+      return;
+    }
+    if (usernameAvailability === 'taken') {
+      await showError('Bu kullanıcı adı zaten kullanılıyor.');
+      return;
+    }
+    if (emailAvailability === 'taken') {
+      await showError('Bu email adresi zaten kayıtlı.');
       return;
     }
 
@@ -170,6 +228,15 @@ export default function UserRegister() {
                 placeholder="kullaniciadi"
                 required
               />
+              {usernameAvailability === 'checking' && (
+                <p className="mt-1 text-xs text-gray-500">Kontrol ediliyor…</p>
+              )}
+              {usernameAvailability === 'taken' && (
+                <p className="mt-1 text-xs text-red-600">Bu kullanıcı adı zaten kullanılıyor.</p>
+              )}
+              {usernameAvailability === 'available' && (
+                <p className="mt-1 text-xs text-emerald-700">Kullanılabilir.</p>
+              )}
             </div>
 
             <div>
@@ -182,6 +249,15 @@ export default function UserRegister() {
                 placeholder="email@ornek.com"
                 required
               />
+              {emailAvailability === 'checking' && (
+                <p className="mt-1 text-xs text-gray-500">Kontrol ediliyor…</p>
+              )}
+              {emailAvailability === 'taken' && (
+                <p className="mt-1 text-xs text-red-600">Bu email adresi zaten kayıtlı.</p>
+              )}
+              {emailAvailability === 'available' && (
+                <p className="mt-1 text-xs text-emerald-700">Kullanılabilir.</p>
+              )}
             </div>
 
             <div>
@@ -274,7 +350,13 @@ export default function UserRegister() {
 
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={
+                isSubmitting ||
+                usernameAvailability === 'taken' ||
+                emailAvailability === 'taken' ||
+                usernameAvailability === 'checking' ||
+                emailAvailability === 'checking'
+              }
               className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-semibold text-sm disabled:opacity-50"
             >
               {isSubmitting ? 'Kaydediliyor...' : 'Kayıt Ol'}

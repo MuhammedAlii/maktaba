@@ -2,6 +2,26 @@
 
 Vite + React SPA; Firebase ve Cloudinary istemci tarafında `VITE_*` ortam değişkenleriyle yapılandırılır.
 
+## Önerilen: Git’ten doğrudan deploy (GitHub)
+
+Kodunuz zaten bir Git remote’ta ise (ör. `github.com/MuhammedAlii/maktaba`), Vercel her `push` sonrası otomatik build eder; CLI şart değildir.
+
+1. **[vercel.com](https://vercel.com)** hesabıyla giriş yapın → **Add New…** → **Project**.
+2. **Import Git Repository**: GitHub’ı seçin, ilk seferde **Install** ile Vercel GitHub uygulamasına erişim verin (tüm repolar veya yalnızca `maktaba`).
+3. Listeden **maktaba** reposunu seçin → **Import**.
+4. Vercel ayarları kökteki `vercel.json` ile hizalanır:
+   - **Framework Preset:** Vite (otomatik seçilebilir)
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `dist`
+   - **Root Directory:** `.` (monorepo değilse)
+5. **Deploy** deyin. İlk build biter bitmez Preview/Production URL görünür.
+6. **Settings → Environment Variables:** Bölüm 2’deki tüm `VITE_*` değişkenlerini ekleyin (Production ve istiyorsanız Preview için). Kaydettikten sonra **Deployments** → son deployment → **⋯** → **Redeploy** (env’lerin derlemeye girmesi için).
+7. **Production branch:** **Settings → Git** içinde genelde `main`; bu dala her merge/push production deploy tetikler. Diğer dallar ve pull request’ler için Vercel otomatik **Preview** URL üretir.
+
+Firebase yetkili alanlar ve Google API referrer ayarları için aşağıdaki bölümlere bakın.
+
+---
+
 ## Git olmadan: Vercel CLI (bilgisayardan yükleme)
 
 Repo’yu Git’e bağlamadan, projeyi doğrudan Vercel’e göndermek için:
@@ -29,15 +49,9 @@ Yerelde `.vercel/` klasörü oluşur (CLI’nın proje eşlemesi); `.gitignore` 
 
 ---
 
-## 1. Vercel projesi (Git ile)
+## 1. Yapılandırma özeti (`vercel.json`)
 
-1. [vercel.com](https://vercel.com) → **Add New** → **Project** → Git reposunu bağlayın.
-2. **Framework Preset:** Vite (çoğu zaman otomatik algılanır).
-3. **Build Command:** `npm run build`  
-4. **Output Directory:** `dist`  
-5. **Install Command:** `npm install` (varsayılan)
-
-Kökteki `vercel.json` SPA için tüm yolları `index.html`e yönlendirir (React Router `/admin`, `/users` vb.).
+Kökteki `vercel.json` build komutunu, çıktı klasörünü ve SPA için tüm yolları `index.html`e yönlendirmeyi tanımlar (React Router `/admin`, `/users` vb.). Git ile import ederken bu değerler projeye uygulanır.
 
 ## 2. Vercel ortam değişkenleri
 

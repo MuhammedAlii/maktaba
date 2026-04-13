@@ -2,6 +2,7 @@ import { useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import MainLayout from '../layout/MainLayout';
 import UserAppLayout from '../layout/UserAppLayout';
+import PwaInstallFab from '../pwa/PwaInstallFab';
 
 const ADMIN_PATHS = ['/users', '/regions', '/lessons', '/settings', '/onaylamalar'];
 const REGION_SUPERVISOR_PATHS = [
@@ -24,7 +25,12 @@ export default function RoleBasedLayout() {
     if (path === '/vird-takip') {
       return <Navigate to="/" replace />;
     }
-    return <MainLayout />;
+    return (
+      <>
+        <MainLayout />
+        <PwaInstallFab />
+      </>
+    );
   }
 
   if (isRegionSupervisor) {
@@ -40,7 +46,12 @@ export default function RoleBasedLayout() {
     if (!isAllowed) {
       return <Navigate to="/users" replace />;
     }
-    return <MainLayout />;
+    return (
+      <>
+        <MainLayout />
+        <PwaInstallFab />
+      </>
+    );
   }
 
   const isAdminPath = ADMIN_PATHS.some((p) => path.startsWith(p));
@@ -62,5 +73,10 @@ export default function RoleBasedLayout() {
     return <Navigate to="/" replace />;
   }
 
-  return <UserAppLayout />;
+  return (
+    <>
+      <UserAppLayout />
+      <PwaInstallFab />
+    </>
+  );
 }

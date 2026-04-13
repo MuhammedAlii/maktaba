@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, firestoreHelpers } from '../../hooks/useFirestore';
 import { where, Timestamp, deleteField } from 'firebase/firestore';
@@ -46,6 +47,13 @@ interface RegionOption {
   id: string;
   name: string;
   isActive: boolean;
+}
+
+function normalizeInput(value: string): { raw: string; lower: string; candidates: string[] } {
+  const raw = value.trim();
+  const lower = raw.toLowerCase();
+  const candidates = Array.from(new Set([raw, lower])).filter(Boolean);
+  return { raw, lower, candidates };
 }
 
 function UserListAvatar({
@@ -118,6 +126,14 @@ export default function Users() {
     isUserApproved: false
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  type AvailabilityState = 'idle' | 'checking' | 'available' | 'taken';
+  const [addUsernameAvailability, setAddUsernameAvailability] = useState<AvailabilityState>('idle');
+  const [addEmailAvailability, setAddEmailAvailability] = useState<AvailabilityState>('idle');
+
+  const [inactiveActionMenuUserId, setInactiveActionMenuUserId] = useState<string | null>(null);
+  const inactiveMenuRef = useRef<HTMLDivElement>(null);
+  const [inactiveMenuPosition, setInactiveMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const [editRegionIds, setEditRegionIds] = useState<string[]>([]);
   const [isRegionDropdownOpen, setIsRegionDropdownOpen] = useState(false);
   const [regionSearch, setRegionSearch] = useState('');
@@ -233,6 +249,48 @@ export default function Users() {
     showLoading('Kullanıcı ekleniyor...');
     
     try {
+      const normalizedUsername = normalizeInput(formData.username);
+      const normalizedEmail = normalizeInput(formData.email);
+
+      if (!normalizedUsername.raw || !normalizedEmail.raw) {
+        throw new Error('Kullanıcı adı ve email zorunludur.');
+      }
+
+      if (addUsernameAvailability === 'taken') {
+        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
+      }
+      if (addEmailAvailability === 'taken') {
+        throw new Error('Bu email adresi zaten kayıtlı.');
+      }
+
+      const [existingUsername, existingEmail] = await Promise.all([
+        firestoreHelpers.getAll<User>('users', [
+          where(
+            'username',
+            normalizedUsername.candidates.length > 1 ? 'in' : '==',
+            normalizedUsername.candidates.length > 1
+              ? normalizedUsername.candidates
+              : normalizedUsername.lower,
+          ),
+          firestoreHelpers.query.limit(1),
+        ]),
+        firestoreHelpers.getAll<User>('users', [
+          where(
+            'email',
+            normalizedEmail.candidates.length > 1 ? 'in' : '==',
+            normalizedEmail.candidates.length > 1 ? normalizedEmail.candidates : normalizedEmail.lower,
+          ),
+          firestoreHelpers.query.limit(1),
+        ]),
+      ]);
+
+      if (existingUsername.length > 0) {
+        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
+      }
+      if (existingEmail.length > 0) {
+        throw new Error('Bu email adresi zaten kayıtlı.');
+      }
+
       // Firebase'e yeni kullanıcı ekle
       // Firebase yapısına göre: name, lastname, username, email, password, role, phone, adres, regionId, isActive, createAt
       const rawRegionIds =
@@ -249,8 +307,8 @@ export default function Users() {
       const newId = await firestoreHelpers.add<User>('users', {
         name: formData.name.trim(),
         lastname: formData.lastname.trim(),
-        username: formData.username.trim(),
-        email: formData.email.trim(),
+        username: normalizedUsername.lower,
+        email: normalizedEmail.lower,
         password: formData.password,
         role: formData.role,
         phone: formData.phone.trim() || '',
@@ -286,6 +344,8 @@ export default function Users() {
       setFormData({ name: '', lastname: '', username: '', email: '', password: '', role: 'user', phone: '', adres: '', regionId: '' });
       setAddRegionIds([]);
       setAddAvatarFile(null);
+      setAddUsernameAvailability('idle');
+      setAddEmailAvailability('idle');
       if (addPhotoInputRef.current) addPhotoInputRef.current.value = '';
       
       hideLoading();
@@ -294,11 +354,60 @@ export default function Users() {
     } catch (error) {
       console.error('Kullanıcı eklenirken hata:', error);
       hideLoading();
-      await showError('Kullanıcı eklenirken bir hata oluştu!');
+      await showError(
+        error instanceof Error ? error.message : 'Kullanıcı eklenirken bir hata oluştu!',
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    if (!showModal) return;
+
+    const username = formData.username;
+    const email = formData.email;
+
+    const t = window.setTimeout(() => {
+      const u = normalizeInput(username);
+      if (u.raw.length >= 3) {
+        setAddUsernameAvailability('checking');
+        firestoreHelpers
+          .getAll<User>('users', [
+            where(
+              'username',
+              u.candidates.length > 1 ? 'in' : '==',
+              u.candidates.length > 1 ? u.candidates : u.lower,
+            ),
+            firestoreHelpers.query.limit(1),
+          ])
+          .then((res) => setAddUsernameAvailability(res.length > 0 ? 'taken' : 'available'))
+          .catch(() => setAddUsernameAvailability('idle'));
+      } else {
+        setAddUsernameAvailability('idle');
+      }
+
+      const e = normalizeInput(email);
+      if (e.raw.includes('@') && e.raw.length >= 6) {
+        setAddEmailAvailability('checking');
+        firestoreHelpers
+          .getAll<User>('users', [
+            where(
+              'email',
+              e.candidates.length > 1 ? 'in' : '==',
+              e.candidates.length > 1 ? e.candidates : e.lower,
+            ),
+            firestoreHelpers.query.limit(1),
+          ])
+          .then((res) => setAddEmailAvailability(res.length > 0 ? 'taken' : 'available'))
+          .catch(() => setAddEmailAvailability('idle'));
+      } else {
+        setAddEmailAvailability('idle');
+      }
+    }, 450);
+
+    return () => window.clearTimeout(t);
+  }, [showModal, formData.username, formData.email]);
 
   // Kullanıcı sil (soft delete - Firebase'den silinmez, sadece isActive false yapılır)
   const handleDeleteUser = async (id: string) => {
@@ -363,6 +472,56 @@ export default function Users() {
     }
   };
 
+  const handleHardDeleteUser = async (id: string) => {
+    const confirmed = await showConfirm(
+      'Bu kullanıcı kalıcı olarak silinecek. Bu işlem geri alınamaz. Devam edilsin mi?',
+      'Kullanıcıyı Kalıcı Sil',
+      {
+        confirmButtonText: 'Evet, Kalıcı Sil',
+        cancelButtonText: 'İptal',
+        icon: 'warning',
+        confirmButtonColor: '#dc2626',
+      },
+    );
+    if (!confirmed) return;
+
+    showLoading('Kullanıcı siliniyor...');
+    try {
+      await firestoreHelpers.delete('users', id);
+      hideLoading();
+    } catch (error) {
+      console.error('Kullanıcı kalıcı silinirken hata:', error);
+      hideLoading();
+      await showError(
+        error instanceof Error ? error.message : 'Kullanıcı silinirken bir hata oluştu!',
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (!inactiveActionMenuUserId) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setInactiveActionMenuUserId(null);
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = inactiveMenuRef.current;
+      if (!el) return;
+      if (!el.contains(e.target as Node)) setInactiveActionMenuUserId(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onMouseDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [inactiveActionMenuUserId]);
+
+  useEffect(() => {
+    if (!inactiveActionMenuUserId) {
+      setInactiveMenuPosition(null);
+    }
+  }, [inactiveActionMenuUserId]);
+
   // Kullanıcı düzenleme modal'ını aç
   const handleEditUser = (user: User) => {
     setEditingUser(user);
@@ -402,11 +561,47 @@ export default function Users() {
     showLoading('Kullanıcı güncelleniyor...');
     
     try {
+      const normalizedUsername = normalizeInput(editFormData.username);
+      const normalizedEmail = normalizeInput(editFormData.email);
+
+      if (!normalizedUsername.raw || !normalizedEmail.raw) {
+        throw new Error('Kullanıcı adı ve email zorunludur.');
+      }
+
+      // Username/email başka bir kullanıcıda var mı kontrol et (edit ekranı)
+      const [existingUsername, existingEmail] = await Promise.all([
+        firestoreHelpers.getAll<User>('users', [
+          where(
+            'username',
+            normalizedUsername.candidates.length > 1 ? 'in' : '==',
+            normalizedUsername.candidates.length > 1
+              ? normalizedUsername.candidates
+              : normalizedUsername.lower,
+          ),
+          firestoreHelpers.query.limit(5),
+        ]),
+        firestoreHelpers.getAll<User>('users', [
+          where(
+            'email',
+            normalizedEmail.candidates.length > 1 ? 'in' : '==',
+            normalizedEmail.candidates.length > 1 ? normalizedEmail.candidates : normalizedEmail.lower,
+          ),
+          firestoreHelpers.query.limit(5),
+        ]),
+      ]);
+
+      if (existingUsername.some((u) => u.id !== editingUser.id)) {
+        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
+      }
+      if (existingEmail.some((u) => u.id !== editingUser.id)) {
+        throw new Error('Bu email adresi zaten kayıtlı.');
+      }
+
       const updates: Partial<User> = {
         name: editFormData.name.trim(),
         lastname: editFormData.lastname.trim(),
-        username: editFormData.username.trim(),
-        email: editFormData.email.trim(),
+        username: normalizedUsername.lower,
+        email: normalizedEmail.lower,
         role: editFormData.role,
         phone: editFormData.phone.trim() || '',
         adres: editFormData.adres.trim() || '',
@@ -473,7 +668,9 @@ export default function Users() {
     } catch (error) {
       console.error('Kullanıcı güncellenirken hata:', error);
       hideLoading();
-      await showError('Kullanıcı güncellenirken bir hata oluştu!');
+      await showError(
+        error instanceof Error ? error.message : 'Kullanıcı güncellenirken bir hata oluştu!',
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -710,12 +907,63 @@ export default function Users() {
                             <HiTrash className="w-5 h-5" />
                           </button>
                         ) : (
-                          <button
-                            onClick={() => handleActivateUser(user.id)}
-                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                          >
-                            <HiRefresh className="w-5 h-5" />
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                setInactiveActionMenuUserId((prev) => (prev === user.id ? null : user.id));
+                                setInactiveMenuPosition({
+                                  top: rect.bottom + 8,
+                                  left: rect.right,
+                                });
+                              }}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                              title="İşlemler"
+                            >
+                              <HiRefresh className="w-5 h-5" />
+                            </button>
+
+                            {inactiveActionMenuUserId === user.id &&
+                              inactiveMenuPosition &&
+                              createPortal(
+                                <div
+                                  ref={inactiveMenuRef}
+                                  className="fixed z-[9999] w-52 -translate-x-full rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden"
+                                  style={{
+                                    top: inactiveMenuPosition.top,
+                                    left: inactiveMenuPosition.left,
+                                  }}
+                                  role="menu"
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setInactiveActionMenuUserId(null);
+                                      setInactiveMenuPosition(null);
+                                      await handleActivateUser(user.id);
+                                    }}
+                                    className="w-full px-3 py-2.5 text-left text-sm text-gray-800 hover:bg-gray-50"
+                                    role="menuitem"
+                                  >
+                                    Kullanıcıyı aktif et
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setInactiveActionMenuUserId(null);
+                                      setInactiveMenuPosition(null);
+                                      await handleHardDeleteUser(user.id);
+                                    }}
+                                    className="w-full px-3 py-2.5 text-left text-sm text-red-700 hover:bg-red-50"
+                                    role="menuitem"
+                                  >
+                                    Sistemden tamamen sil
+                                  </button>
+                                </div>,
+                                document.body,
+                              )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -1168,6 +1416,8 @@ export default function Users() {
                 onClick={() => {
                   setShowModal(false);
                   setAddAvatarFile(null);
+                  setAddUsernameAvailability('idle');
+                  setAddEmailAvailability('idle');
                   if (addPhotoInputRef.current) addPhotoInputRef.current.value = '';
                 }}
                 className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1280,6 +1530,15 @@ export default function Users() {
                   placeholder="kullanıcı adı"
                   disabled={isSubmitting}
                 />
+                {addUsernameAvailability === 'checking' && (
+                  <p className="mt-1 text-xs text-gray-500">Kontrol ediliyor…</p>
+                )}
+                {addUsernameAvailability === 'taken' && (
+                  <p className="mt-1 text-xs text-red-600">Bu kullanıcı adı zaten kullanılıyor.</p>
+                )}
+                {addUsernameAvailability === 'available' && (
+                  <p className="mt-1 text-xs text-emerald-700">Kullanılabilir.</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Email *</label>
@@ -1292,6 +1551,15 @@ export default function Users() {
                   placeholder="email@example.com"
                   disabled={isSubmitting}
                 />
+                {addEmailAvailability === 'checking' && (
+                  <p className="mt-1 text-xs text-gray-500">Kontrol ediliyor…</p>
+                )}
+                {addEmailAvailability === 'taken' && (
+                  <p className="mt-1 text-xs text-red-600">Bu email adresi zaten kayıtlı.</p>
+                )}
+                {addEmailAvailability === 'available' && (
+                  <p className="mt-1 text-xs text-emerald-700">Kullanılabilir.</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Rol *</label>

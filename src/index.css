@@ -3,9 +3,18 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    background-color: theme('colors.gray.50');
+  }
+
   body {
     @apply antialiased bg-gray-50;
     margin: 0;
+  }
+
+  #root {
+    min-height: 100dvh;
+    background-color: theme('colors.gray.50');
   }
 }
 
