@@ -96,7 +96,10 @@ export default function UserAppLayout() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-emerald-50/30 to-teal-50/20">
       <TodayLessonNotification />
       {/* Header - sticky, minimal */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-emerald-100/80 shadow-sm">
+      <header
+        className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-emerald-100/80 shadow-sm"
+        style={{ paddingTop: 'var(--maktaba-safe-top)' }}
+      >
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="flex items-center justify-between h-14 sm:h-16">
             <Link to="/" className="flex items-center gap-2 flex-shrink-0 min-w-0">

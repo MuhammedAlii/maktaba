@@ -18,6 +18,28 @@
   }
 }
 
+/* PWA Safe Area (iOS): keep sticky headers below status bar.
+   We apply this as a CSS variable so we can use it for `top` in sticky headers
+   without shifting the whole page down too much. */
+:root {
+  --maktaba-safe-top: 0px;
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  :root {
+    --maktaba-safe-top: env(safe-area-inset-top, 0px);
+  }
+}
+
+/* iOS standalone: ensure at least a small top inset (SE included) */
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone), (display-mode: fullscreen) {
+    :root {
+      --maktaba-safe-top: max(env(safe-area-inset-top, 0px), 12px);
+    }
+  }
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

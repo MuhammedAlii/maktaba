@@ -578,13 +578,15 @@ export default function Lessons() {
                             <button
                               type="button"
                               onClick={() => {
-                                setLessonRegionsModalLesson(lesson);
-                                setSelectedPlanRegionId(planTargetRegions[0]?.id ?? '');
+                                if (!myRegionId) return;
+                                navigate(`/regions/${myRegionId}?tab=lessons`);
                               }}
-                              className="p-2 text-primary-700 hover:bg-primary-50 rounded-lg transition-colors border border-primary-100"
-                              title="Bölgeler ve ders planı"
+                              disabled={!myRegionId}
+                              className="px-3 py-1.5 rounded-xl bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors flex items-center gap-2 border border-primary-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Bölge ders ayarları"
                             >
                               <HiFolder className="w-5 h-5" />
+                              Ders detayları
                             </button>
                           </>
                         ) : (

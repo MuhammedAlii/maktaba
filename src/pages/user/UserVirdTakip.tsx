@@ -174,7 +174,7 @@ export default function UserVirdTakip() {
               activeVirds.map((v) => (
                 <div
                   key={v.id}
-                  className="flex items-start justify-between gap-4 rounded-xl border border-gray-200 p-4"
+                  className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 rounded-xl border border-gray-200 p-4"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="font-semibold text-gray-900 truncate">{v.name}</div>
@@ -182,7 +182,7 @@ export default function UserVirdTakip() {
                       Hedef toplam: {v.totalTarget} {unitLabel(v.type)}
                     </div>
                   </div>
-                  <div className="w-40 shrink-0">
+                  <div className="w-full sm:w-40 shrink-0">
                     <label className="block text-xs font-semibold text-gray-700 mb-1">
                       Bugün
                     </label>

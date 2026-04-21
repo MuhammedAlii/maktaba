@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useSearchParams, Navigate } from 'react-router-dom';
 import { Timestamp, where } from 'firebase/firestore';
-import { HiTrash, HiPencil, HiCalendar, HiX } from 'react-icons/hi';
+import { HiTrash, HiPencil, HiCalendar, HiX, HiUsers } from 'react-icons/hi';
 import ReactDatePicker, { registerLocale } from 'react-datepicker';
 import { tr } from 'date-fns/locale/tr';
 
@@ -40,6 +40,15 @@ interface User {
   userLectureIds?: string[];
 }
 
+interface UserLectureAttendance {
+  id: string;
+  userId: string;
+  regionId?: string;
+  scheduleId: string;
+  date: Timestamp;
+  attended: boolean;
+}
+
 interface RegionLectureSchedule {
   id: string;
   regionId: string;
@@ -64,6 +73,37 @@ interface Book {
 }
 
 type PortalDropdownPosition = { top: number; left: number; width: number };
+
+const toLocalDateKey = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const startOfLocalDay = (d: Date) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+
+const clampDate = (d: Date, min: Date, max: Date) =>
+  new Date(Math.min(max.getTime(), Math.max(min.getTime(), d.getTime())));
+
+const addDays = (d: Date, days: number) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
+};
+
+const isPlannedForSchedule = (schedule: RegionLectureSchedule, date: Date) => {
+  const jsDay = date.getDay(); // 0 Pazar
+  const dayVal = jsDay === 0 ? 7 : jsDay;
+  return (
+    schedule.daysOfWeek.includes(dayVal) ||
+    (dayVal === 7 && schedule.daysOfWeek.includes(0))
+  );
+};
 
 export default function RegionDetail() {
   const { regionId } = useParams<{ regionId: string }>();
@@ -97,6 +137,16 @@ export default function RegionDetail() {
     useState(false);
   const [participantSearch, setParticipantSearch] = useState('');
   const participantDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  const [attendanceModalSchedule, setAttendanceModalSchedule] =
+    useState<RegionLectureSchedule | null>(null);
+  const [attendanceModalSearch, setAttendanceModalSearch] = useState('');
+  const [attendanceRangeStart, setAttendanceRangeStart] = useState<Date | null>(null);
+  const [attendanceRangeEnd, setAttendanceRangeEnd] = useState<Date | null>(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceSaving, setAttendanceSaving] = useState(false);
+  const [attendanceRecords, setAttendanceRecords] = useState<UserLectureAttendance[]>([]);
+  const [attendanceDraft, setAttendanceDraft] = useState<Record<string, boolean>>({});
 
   const { data: region, loading: regionLoading, error: regionError } = useDocument<Region>(
     'regions',
@@ -210,6 +260,128 @@ export default function RegionDetail() {
     const m = (minutes % 60).toString().padStart(2, '0');
     return `${h}:${m}`;
   };
+
+  const canEditAttendance = isAdmin || isRegionSupervisor;
+
+  const attendanceParticipants = useMemo(() => {
+    const schedule = attendanceModalSchedule;
+    if (!schedule) return [];
+    const ids = new Set((schedule.participantUserIds ?? []).filter(Boolean));
+    return regionParticipantUsers
+      .filter((u) => ids.has(u.id))
+      .filter((u) => {
+        const t = attendanceModalSearch.trim().toLowerCase();
+        if (!t) return true;
+        return `${u.name} ${u.lastname ?? ''} ${u.email}`.toLowerCase().includes(t);
+      })
+      .slice()
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'tr'));
+  }, [attendanceModalSchedule, regionParticipantUsers, attendanceModalSearch]);
+
+  const attendancePlannedDates = useMemo(() => {
+    const schedule = attendanceModalSchedule;
+    if (!schedule) return [];
+    if (!attendanceRangeStart || !attendanceRangeEnd) return [];
+    const start = startOfLocalDay(attendanceRangeStart);
+    const end = startOfLocalDay(attendanceRangeEnd);
+    if (start > end) return [];
+
+    const schedStart = startOfLocalDay(schedule.startDate.toDate());
+    const schedEnd = startOfLocalDay(schedule.endDate.toDate());
+    const from = clampDate(start, schedStart, schedEnd);
+    const to = clampDate(end, schedStart, schedEnd);
+    if (from > to) return [];
+
+    const list: Date[] = [];
+    let d = new Date(from);
+    while (d <= to) {
+      if (isPlannedForSchedule(schedule, d)) {
+        list.push(new Date(d));
+      }
+      d = addDays(d, 1);
+    }
+    return list;
+  }, [attendanceModalSchedule, attendanceRangeStart, attendanceRangeEnd]);
+
+  const attendanceByKey = useMemo(() => {
+    const map: Record<string, UserLectureAttendance> = {};
+    for (const rec of attendanceRecords) {
+      if (!rec.scheduleId || !rec.userId) continue;
+      const key = `${rec.userId}_${toLocalDateKey(rec.date.toDate())}`;
+      map[key] = rec;
+    }
+    return map;
+  }, [attendanceRecords]);
+
+  const getDraftKey = (userId: string, date: Date) =>
+    `${userId}_${toLocalDateKey(date)}`;
+
+  const getCellValue = (userId: string, date: Date): boolean => {
+    const k = getDraftKey(userId, date);
+    if (Object.prototype.hasOwnProperty.call(attendanceDraft, k)) {
+      return Boolean(attendanceDraft[k]);
+    }
+    const existing = attendanceByKey[k];
+    return Boolean(existing?.attended);
+  };
+
+  const closeAttendanceModal = () => {
+    setAttendanceModalSchedule(null);
+    setAttendanceModalSearch('');
+    setAttendanceRangeStart(null);
+    setAttendanceRangeEnd(null);
+    setAttendanceLoading(false);
+    setAttendanceSaving(false);
+    setAttendanceRecords([]);
+    setAttendanceDraft({});
+  };
+
+  useEffect(() => {
+    const schedule = attendanceModalSchedule;
+    if (!schedule) return;
+    if (!canEditAttendance) return;
+
+    const schedStart = startOfLocalDay(schedule.startDate.toDate());
+    const schedEnd = startOfLocalDay(schedule.endDate.toDate());
+    const today = startOfLocalDay(new Date());
+    const defaultEnd = clampDate(today, schedStart, schedEnd);
+    const defaultStart = clampDate(addDays(defaultEnd, -27), schedStart, schedEnd);
+    setAttendanceRangeStart(defaultStart);
+    setAttendanceRangeEnd(defaultEnd);
+  }, [attendanceModalSchedule, canEditAttendance]);
+
+  useEffect(() => {
+    const schedule = attendanceModalSchedule;
+    if (!schedule) return;
+    if (!canEditAttendance) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setAttendanceLoading(true);
+        showLoading('Katılım verileri yükleniyor...');
+        const records = await firestoreHelpers.getAll<UserLectureAttendance>(
+          'userLectureAttendance',
+          [where('scheduleId', '==', schedule.id)],
+        );
+        if (cancelled) return;
+        setAttendanceRecords(records ?? []);
+        setAttendanceDraft({});
+        hideLoading();
+      } catch (err) {
+        console.error(err);
+        if (cancelled) return;
+        hideLoading();
+        await showError('Katılım verileri yüklenirken bir hata oluştu.');
+      } finally {
+        if (!cancelled) setAttendanceLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attendanceModalSchedule, canEditAttendance]);
 
   useEffect(() => {
     if (regionError) {
@@ -1349,7 +1521,18 @@ export default function RegionDetail() {
                                     })()}
                                   </div>
                                 </div>
-                                <div className="flex flex-row sm:flex-col items-center justify-center gap-2 sm:ml-3">
+                                <div className="flex flex-wrap items-center justify-end gap-2 sm:ml-3 flex-shrink-0">
+                                  {canEditAttendance && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setAttendanceModalSchedule(schedule)}
+                                      className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors flex items-center gap-2 border border-emerald-200 text-[11px] font-semibold"
+                                      title="Derse katılım düzenlemesi"
+                                    >
+                                      <HiUsers className="w-4 h-4" />
+                                      Derse Katılım Düzenlemesi
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -1444,6 +1627,333 @@ export default function RegionDetail() {
           </section>
         )}
       </div>
+
+      {attendanceModalSchedule && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4 animate-fade-in"
+          onClick={closeAttendanceModal}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-6xl shadow-large overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 sm:p-5 border-b border-gray-200 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-lg sm:text-xl font-semibold text-gray-900 truncate">
+                  Katılım girişi
+                </h3>
+                <p className="text-xs sm:text-sm text-gray-500 truncate">
+                  {attendanceModalSchedule.lectureName} • {formatTime(attendanceModalSchedule.startTimeMinutes)}-
+                  {formatTime(attendanceModalSchedule.endTimeMinutes)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeAttendanceModal}
+                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors shrink-0"
+              >
+                <HiX className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="min-w-0">
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">
+                      Başlangıç
+                    </label>
+                    <ReactDatePicker
+                      selected={attendanceRangeStart}
+                      onChange={(d: Date | null) => setAttendanceRangeStart(d)}
+                      locale={tr}
+                      dateFormat="dd.MM.yyyy"
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      wrapperClassName="!block !w-full"
+                      popperContainer={({ children }) => createPortal(children, document.body)}
+                      popperClassName="z-[99999]"
+                      disabled={attendanceLoading || attendanceSaving}
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">
+                      Bitiş
+                    </label>
+                    <ReactDatePicker
+                      selected={attendanceRangeEnd}
+                      onChange={(d: Date | null) => setAttendanceRangeEnd(d)}
+                      locale={tr}
+                      dateFormat="dd.MM.yyyy"
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      wrapperClassName="!block !w-full"
+                      popperContainer={({ children }) => createPortal(children, document.body)}
+                      popperClassName="z-[99999]"
+                      disabled={attendanceLoading || attendanceSaving}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const schedule = attendanceModalSchedule;
+                      if (!schedule) return;
+                      const schedStart = startOfLocalDay(schedule.startDate.toDate());
+                      const schedEnd = startOfLocalDay(schedule.endDate.toDate());
+                      const today = startOfLocalDay(new Date());
+                      const end = clampDate(today, schedStart, schedEnd);
+                      const start = clampDate(addDays(end, -27), schedStart, schedEnd);
+                      setAttendanceRangeStart(start);
+                      setAttendanceRangeEnd(end);
+                    }}
+                    className="px-3 py-2.5 text-xs font-medium rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+                    disabled={attendanceLoading || attendanceSaving}
+                  >
+                    Son 4 hafta
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceDraft({})}
+                    className="px-3 py-2.5 text-xs font-medium rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors"
+                    disabled={attendanceLoading || attendanceSaving}
+                    title="Taslak değişiklikleri temizle"
+                  >
+                    Taslağı temizle
+                  </button>
+                </div>
+
+                <div className="flex-1" />
+
+                <div className="w-full lg:w-80">
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">
+                    Kullanıcı ara
+                  </label>
+                  <input
+                    value={attendanceModalSearch}
+                    onChange={(e) => setAttendanceModalSearch(e.target.value)}
+                    placeholder="İsim / e-posta..."
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    disabled={attendanceLoading || attendanceSaving}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 overflow-hidden">
+                <div className="overflow-auto max-h-[60vh]">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50 sticky top-0 z-10">
+                      <tr>
+                        <th className="px-3 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">
+                          Kullanıcı
+                        </th>
+                        {attendancePlannedDates.map((d) => (
+                          <th
+                            key={toLocalDateKey(d)}
+                            className="px-2 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap"
+                            title={d.toLocaleDateString('tr-TR')}
+                          >
+                            {d.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit' })}
+                            <div className="mt-1 flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                className="px-2 py-0.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-[10px] hover:bg-emerald-100 transition-colors"
+                                disabled={attendanceLoading || attendanceSaving}
+                                onClick={() => {
+                                  const patch: Record<string, boolean> = {};
+                                  for (const u of attendanceParticipants) {
+                                    patch[getDraftKey(u.id, d)] = true;
+                                  }
+                                  setAttendanceDraft((prev) => ({ ...prev, ...patch }));
+                                }}
+                                title="Bu tarihte tümünü katıldı yap"
+                              >
+                                Tümü ✓
+                              </button>
+                              <button
+                                type="button"
+                                className="px-2 py-0.5 rounded-lg border border-gray-200 bg-white text-gray-600 text-[10px] hover:bg-gray-50 transition-colors"
+                                disabled={attendanceLoading || attendanceSaving}
+                                onClick={() => {
+                                  const patch: Record<string, boolean> = {};
+                                  for (const u of attendanceParticipants) {
+                                    patch[getDraftKey(u.id, d)] = false;
+                                  }
+                                  setAttendanceDraft((prev) => ({ ...prev, ...patch }));
+                                }}
+                                title="Bu tarihte tümünü temizle (gelmedi)"
+                              >
+                                Temizle
+                              </button>
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-100">
+                      {attendanceParticipants.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={Math.max(1, 1 + attendancePlannedDates.length)}
+                            className="px-4 py-10 text-center text-sm text-gray-500"
+                          >
+                            {attendanceLoading
+                              ? 'Yükleniyor...'
+                              : 'Bu ders planında katılımcı bulunamadı (veya filtre boş döndü).'}
+                          </td>
+                        </tr>
+                      ) : attendancePlannedDates.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={Math.max(1, 1 + attendancePlannedDates.length)}
+                            className="px-4 py-10 text-center text-sm text-gray-500"
+                          >
+                            Seçilen aralıkta bu plana ait ders günü yok.
+                          </td>
+                        </tr>
+                      ) : (
+                        attendanceParticipants.map((u) => (
+                          <tr key={u.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-3 min-w-[14rem]">
+                              <div className="text-sm font-medium text-gray-900">
+                                {u.name} {u.lastname ?? ''}
+                              </div>
+                              <div className="text-xs text-gray-500 truncate">{u.email}</div>
+                            </td>
+                            {attendancePlannedDates.map((d) => {
+                              const attended = getCellValue(u.id, d);
+                              return (
+                                <td key={toLocalDateKey(d)} className="px-2 py-2 text-center">
+                                  <button
+                                    type="button"
+                                    disabled={attendanceLoading || attendanceSaving}
+                                    onClick={() => {
+                                      const k = getDraftKey(u.id, d);
+                                      setAttendanceDraft((prev) => ({
+                                        ...prev,
+                                        [k]: !getCellValue(u.id, d),
+                                      }));
+                                    }}
+                                    className={`w-8 h-8 rounded-lg border transition-colors ${
+                                      attended
+                                        ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700'
+                                        : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                                    }`}
+                                    title={attended ? 'Katıldı' : 'Katılmadı'}
+                                  >
+                                    ✓
+                                  </button>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 sm:p-5 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <p className="text-xs text-gray-500">
+                İpucu: Hücreye tıklayarak tek tek, başlıktaki “Tümü ✓ / Temizle” ile toplu giriş yapabilirsiniz.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={closeAttendanceModal}
+                  className="px-4 py-2.5 rounded-xl border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                  disabled={attendanceSaving}
+                >
+                  Kapat
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const schedule = attendanceModalSchedule;
+                    if (!schedule) return;
+
+                    const keys = Object.keys(attendanceDraft);
+                    if (keys.length === 0) {
+                      await showSuccess('Değişiklik yok.');
+                      return;
+                    }
+
+                    try {
+                      setAttendanceSaving(true);
+                      showLoading('Kaydediliyor...');
+
+                      const ops: Promise<unknown>[] = [];
+                      for (const k of keys) {
+                        const nextVal = Boolean(attendanceDraft[k]);
+                        const existing = attendanceByKey[k];
+                        const [userId, dateKey] = k.split('_');
+                        if (!userId || !dateKey) continue;
+
+                        if (nextVal) {
+                          if (existing?.id) {
+                            if (!existing.attended) {
+                              ops.push(
+                                firestoreHelpers.update<UserLectureAttendance>(
+                                  'userLectureAttendance',
+                                  existing.id,
+                                  { attended: true },
+                                ),
+                              );
+                            }
+                          } else {
+                            ops.push(
+                              firestoreHelpers.add<UserLectureAttendance>('userLectureAttendance', {
+                                userId,
+                                scheduleId: schedule.id,
+                                regionId: schedule.regionId,
+                                date: Timestamp.fromDate(new Date(`${dateKey}T00:00:00`)),
+                                attended: true,
+                              } as Omit<UserLectureAttendance, 'id'>),
+                            );
+                          }
+                        } else {
+                          if (existing?.id) {
+                            ops.push(
+                              firestoreHelpers.delete('userLectureAttendance', existing.id),
+                            );
+                          }
+                        }
+                      }
+
+                      await Promise.all(ops);
+
+                      // Re-fetch so grid becomes source-of-truth again
+                      const refreshed = await firestoreHelpers.getAll<UserLectureAttendance>(
+                        'userLectureAttendance',
+                        [where('scheduleId', '==', schedule.id)],
+                      );
+                      setAttendanceRecords(refreshed ?? []);
+                      setAttendanceDraft({});
+
+                      hideLoading();
+                      await showSuccess('Katılım bilgileri kaydedildi.');
+                    } catch (err) {
+                      console.error(err);
+                      hideLoading();
+                      await showError('Kaydetme sırasında bir hata oluştu.');
+                    } finally {
+                      setAttendanceSaving(false);
+                    }
+                  }}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={attendanceLoading || attendanceSaving}
+                >
+                  {attendanceSaving ? 'Kaydediliyor...' : 'Kaydet'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showScheduleModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
