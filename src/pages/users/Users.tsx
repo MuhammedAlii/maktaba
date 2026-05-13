@@ -56,6 +56,11 @@ function normalizeInput(value: string): { raw: string; lower: string; candidates
   return { raw, lower, candidates };
 }
 
+/** Kullanıcı adı: yalnızca küçük harf, rakam ve alt çizgi (kayıtta da bu biçim kullanılır). */
+function sanitizeUsernameInput(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+}
+
 function UserListAvatar({
   photoURL,
   initials,
@@ -249,46 +254,52 @@ export default function Users() {
     showLoading('Kullanıcı ekleniyor...');
     
     try {
-      const normalizedUsername = normalizeInput(formData.username);
+      const normalizedUsername = normalizeInput(sanitizeUsernameInput(formData.username));
       const normalizedEmail = normalizeInput(formData.email);
 
-      if (!normalizedUsername.raw || !normalizedEmail.raw) {
-        throw new Error('Kullanıcı adı ve email zorunludur.');
+      if (!normalizedUsername.raw) {
+        throw new Error('Kullanıcı adı zorunludur.');
+      }
+
+      const emailRaw = normalizedEmail.raw;
+      if (emailRaw && !emailRaw.includes('@')) {
+        throw new Error('Email girildiğinde geçerli bir adres yazın veya alanı boş bırakın.');
       }
 
       if (addUsernameAvailability === 'taken') {
         throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
       }
-      if (addEmailAvailability === 'taken') {
+      if (emailRaw && addEmailAvailability === 'taken') {
         throw new Error('Bu email adresi zaten kayıtlı.');
       }
 
-      const [existingUsername, existingEmail] = await Promise.all([
-        firestoreHelpers.getAll<User>('users', [
-          where(
-            'username',
-            normalizedUsername.candidates.length > 1 ? 'in' : '==',
-            normalizedUsername.candidates.length > 1
-              ? normalizedUsername.candidates
-              : normalizedUsername.lower,
-          ),
-          firestoreHelpers.query.limit(1),
-        ]),
-        firestoreHelpers.getAll<User>('users', [
+      const existingUsername = await firestoreHelpers.getAll<User>('users', [
+        where(
+          'username',
+          normalizedUsername.candidates.length > 1 ? 'in' : '==',
+          normalizedUsername.candidates.length > 1
+            ? normalizedUsername.candidates
+            : normalizedUsername.lower,
+        ),
+        firestoreHelpers.query.limit(1),
+      ]);
+
+      if (existingUsername.length > 0) {
+        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
+      }
+
+      if (emailRaw) {
+        const existingEmail = await firestoreHelpers.getAll<User>('users', [
           where(
             'email',
             normalizedEmail.candidates.length > 1 ? 'in' : '==',
             normalizedEmail.candidates.length > 1 ? normalizedEmail.candidates : normalizedEmail.lower,
           ),
           firestoreHelpers.query.limit(1),
-        ]),
-      ]);
-
-      if (existingUsername.length > 0) {
-        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
-      }
-      if (existingEmail.length > 0) {
-        throw new Error('Bu email adresi zaten kayıtlı.');
+        ]);
+        if (existingEmail.length > 0) {
+          throw new Error('Bu email adresi zaten kayıtlı.');
+        }
       }
 
       // Firebase'e yeni kullanıcı ekle
@@ -308,7 +319,7 @@ export default function Users() {
         name: formData.name.trim(),
         lastname: formData.lastname.trim(),
         username: normalizedUsername.lower,
-        email: normalizedEmail.lower,
+        email: emailRaw ? normalizedEmail.lower : '',
         password: formData.password,
         role: formData.role,
         phone: formData.phone.trim() || '',
@@ -388,7 +399,7 @@ export default function Users() {
       }
 
       const e = normalizeInput(email);
-      if (e.raw.includes('@') && e.raw.length >= 6) {
+      if (e.raw && e.raw.includes('@') && e.raw.length >= 6) {
         setAddEmailAvailability('checking');
         firestoreHelpers
           .getAll<User>('users', [
@@ -531,7 +542,7 @@ export default function Users() {
     setEditFormData({
       name: user.name || '',
       lastname: user.lastname || '',
-      username: user.username || '',
+      username: sanitizeUsernameInput(user.username || ''),
       email: user.email || '',
       password: '',
       role: user.role || 'user',
@@ -561,47 +572,53 @@ export default function Users() {
     showLoading('Kullanıcı güncelleniyor...');
     
     try {
-      const normalizedUsername = normalizeInput(editFormData.username);
+      const normalizedUsername = normalizeInput(sanitizeUsernameInput(editFormData.username));
       const normalizedEmail = normalizeInput(editFormData.email);
 
-      if (!normalizedUsername.raw || !normalizedEmail.raw) {
-        throw new Error('Kullanıcı adı ve email zorunludur.');
+      if (!normalizedUsername.raw) {
+        throw new Error('Kullanıcı adı zorunludur.');
+      }
+
+      const emailRaw = normalizedEmail.raw;
+      if (emailRaw && !emailRaw.includes('@')) {
+        throw new Error('Email girildiğinde geçerli bir adres yazın veya alanı boş bırakın.');
       }
 
       // Username/email başka bir kullanıcıda var mı kontrol et (edit ekranı)
-      const [existingUsername, existingEmail] = await Promise.all([
-        firestoreHelpers.getAll<User>('users', [
-          where(
-            'username',
-            normalizedUsername.candidates.length > 1 ? 'in' : '==',
-            normalizedUsername.candidates.length > 1
-              ? normalizedUsername.candidates
-              : normalizedUsername.lower,
-          ),
-          firestoreHelpers.query.limit(5),
-        ]),
-        firestoreHelpers.getAll<User>('users', [
+      const existingUsername = await firestoreHelpers.getAll<User>('users', [
+        where(
+          'username',
+          normalizedUsername.candidates.length > 1 ? 'in' : '==',
+          normalizedUsername.candidates.length > 1
+            ? normalizedUsername.candidates
+            : normalizedUsername.lower,
+        ),
+        firestoreHelpers.query.limit(5),
+      ]);
+
+      if (existingUsername.some((u) => u.id !== editingUser.id)) {
+        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
+      }
+
+      if (emailRaw) {
+        const existingEmail = await firestoreHelpers.getAll<User>('users', [
           where(
             'email',
             normalizedEmail.candidates.length > 1 ? 'in' : '==',
             normalizedEmail.candidates.length > 1 ? normalizedEmail.candidates : normalizedEmail.lower,
           ),
           firestoreHelpers.query.limit(5),
-        ]),
-      ]);
-
-      if (existingUsername.some((u) => u.id !== editingUser.id)) {
-        throw new Error('Bu kullanıcı adı zaten kullanılıyor.');
-      }
-      if (existingEmail.some((u) => u.id !== editingUser.id)) {
-        throw new Error('Bu email adresi zaten kayıtlı.');
+        ]);
+        if (existingEmail.some((u) => u.id !== editingUser.id)) {
+          throw new Error('Bu email adresi zaten kayıtlı.');
+        }
       }
 
       const updates: Partial<User> = {
         name: editFormData.name.trim(),
         lastname: editFormData.lastname.trim(),
         username: normalizedUsername.lower,
-        email: normalizedEmail.lower,
+        email: emailRaw ? normalizedEmail.lower : '',
         role: editFormData.role,
         phone: editFormData.phone.trim() || '',
         adres: editFormData.adres.trim() || '',
@@ -1122,21 +1139,33 @@ export default function Users() {
                   type="text"
                   required
                   value={editFormData.username}
-                  onChange={(e) => setEditFormData({ ...editFormData, username: e.target.value })}
+                  onChange={(e) =>
+                    setEditFormData({
+                      ...editFormData,
+                      username: sanitizeUsernameInput(e.target.value),
+                    })
+                  }
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-                  placeholder="kullanıcı adı"
+                  placeholder="kullanici_adi"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   disabled={isSubmitting}
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Yalnızca küçük harf, rakam ve alt çizgi (_) kullanılabilir.
+                </p>
               </div>
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Email *</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Email (isteğe bağlı)</label>
                 <input
-                  type="email"
-                  required
+                  type="text"
+                  inputMode="email"
+                  autoComplete="email"
                   value={editFormData.email}
                   onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-                  placeholder="email@example.com"
+                  placeholder="Boş bırakılabilir veya email@example.com"
                   disabled={isSubmitting}
                 />
               </div>
@@ -1525,11 +1554,19 @@ export default function Users() {
                   type="text"
                   required
                   value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, username: sanitizeUsernameInput(e.target.value) })
+                  }
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-                  placeholder="kullanıcı adı"
+                  placeholder="kullanici_adi"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                   disabled={isSubmitting}
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Yalnızca küçük harf, rakam ve alt çizgi (_) kullanılabilir.
+                </p>
                 {addUsernameAvailability === 'checking' && (
                   <p className="mt-1 text-xs text-gray-500">Kontrol ediliyor…</p>
                 )}
@@ -1541,14 +1578,15 @@ export default function Users() {
                 )}
               </div>
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Email *</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Email (isteğe bağlı)</label>
                 <input
-                  type="email"
-                  required
+                  type="text"
+                  inputMode="email"
+                  autoComplete="email"
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all"
-                  placeholder="email@example.com"
+                  placeholder="Boş bırakılabilir veya email@example.com"
                   disabled={isSubmitting}
                 />
                 {addEmailAvailability === 'checking' && (
